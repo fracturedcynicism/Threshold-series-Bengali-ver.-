@@ -1,15 +1,17 @@
 /* ═══════════════════════════════════════════════
    FC READER — APP.JS
-   Zero-config reader. Driven by data/books.json
-   (a plain list of .txt filenames). All metadata
-   — title, chapters, word count — auto-extracted
-   from the .txt files themselves.
+   Template reader for any Fractured Cynicism series.
+   To deploy for a new series, edit two files only:
+     data/config.json  — series title, accent colour
+     data/books.json   — list of .txt filenames
+   Everything else is auto-extracted from the .txt files.
    ═══════════════════════════════════════════════ */
 
 'use strict';
 
 const State = {
-  books: [],          // populated after scanning books.json + reading each file header
+  books: [],
+  config: {},         // loaded from data/config.json
   currentBookIndex: -1,
   currentChapters: [],
   scrollPositions: {},
@@ -27,13 +29,23 @@ async function init() {
   document.body.classList.add('font-md');
 
   try {
-    // books.json is just an array of filenames e.g. ["book-one.txt","book-two.txt"]
-    const filenames = await fetchJSON('data/books.json');
-    if (!Array.isArray(filenames) || filenames.length === 0) {
-      throw new Error('books.json is empty or not an array.');
+    // Load config.json (series branding) — graceful fallback if absent
+    try {
+      State.config = await fetchJSON('data/config.json');
+    } catch (_) {
+      State.config = {};  // all fields optional — reader still works without it
     }
 
-    // Read the first ~40 lines of each file to extract metadata
+    // Apply accent colours from config immediately (before books load)
+    applyAccentColors();
+
+    // books.json — plain array of .txt filenames in reading order
+    const filenames = await fetchJSON('data/books.json');
+    if (!Array.isArray(filenames) || filenames.length === 0) {
+      throw new Error('books.json is empty or not a valid array.');
+    }
+
+    // Extract metadata from the header block of each .txt
     State.books = await Promise.all(
       filenames.map((fname, i) => extractBookMeta(fname, i))
     );
@@ -45,6 +57,22 @@ async function init() {
   } catch (e) {
     console.error('Reader init failed:', e);
     showError('Initialisation failed. Check that data/books.json exists and lists your .txt files.');
+  }
+}
+
+// ── ACCENT COLOURS ────────────────────────────────
+function applyAccentColors() {
+  const cfg = State.config;
+  if (cfg.accentColor) document.documentElement.style.setProperty('--accent',     cfg.accentColor);
+  if (cfg.accentDim)   document.documentElement.style.setProperty('--accent-dim', cfg.accentDim);
+  // Derive glow from accentColor if provided
+  if (cfg.accentColor) {
+    const hex = cfg.accentColor.replace('#','');
+    const r = parseInt(hex.slice(0,2),16);
+    const g = parseInt(hex.slice(2,4),16);
+    const b = parseInt(hex.slice(4,6),16);
+    document.documentElement.style.setProperty('--accent-glow',     `rgba(${r},${g},${b},0.08)`);
+    document.documentElement.style.setProperty('--accent-glow-str', `rgba(${r},${g},${b},0.15)`);
   }
 }
 
@@ -154,38 +182,38 @@ function slugify(filename) {
 }
 
 // ── BRANDING ──────────────────────────────────────
+// Priority: config.json > auto-derived from .txt headers > fallback
 function applySeriesBranding() {
-  const books = State.books;
+  const books   = State.books;
+  const cfg     = State.config;
   const isMulti = books.length > 1;
 
-  // Derive series title: if multi-book, use shared author or a generic label
-  // If all books share the same author, use that as the series author line
-  const authors = [...new Set(books.map(b => b.author).filter(Boolean))];
-  const seriesAuthor = authors.length === 1 ? authors[0] : authors.join(' / ');
+  const autoAuthors = [...new Set(books.map(b => b.author).filter(Boolean))];
+  const autoAuthor  = autoAuthors.length === 1 ? autoAuthors[0] : autoAuthors.join(' / ');
 
-  const seriesTitle = isMulti
-    ? (seriesAuthor ? `${seriesAuthor} — Archive` : 'Reading Archive')
-    : books[0].title;
-
-  const seriesSub = isMulti
-    ? `${books.length} BOOK${books.length > 1 ? 'S' : ''}${seriesAuthor ? ' / ' + seriesAuthor.toUpperCase() : ''}`
-    : (books[0].author ? books[0].author.toUpperCase() : '');
+  const seriesTitle   = cfg.title   || (isMulti ? (autoAuthor ? autoAuthor + ' — Archive' : 'Reading Archive') : books[0].title);
+  const seriesAuthor  = cfg.author  || autoAuthor || '';
+  const seriesTagline = cfg.tagline || (isMulti ? seriesAuthor : (books[0].tagline || ''));
+  const seriesBadge   = cfg.badge   || (isMulti ? 'SERIES ARCHIVE' : 'STANDALONE');
+  const seriesSub     = isMulti
+    ? books.length + ' BOOK' + (books.length > 1 ? 'S' : '') + (seriesAuthor ? ' / ' + seriesAuthor.toUpperCase() : '')
+    : (seriesAuthor ? seriesAuthor.toUpperCase() : '');
 
   document.title = seriesTitle;
 
-  setText('sidebarBadge',       isMulti ? 'SERIES ARCHIVE' : 'STANDALONE');
+  setText('sidebarBadge',       seriesBadge);
   setText('sidebarSeriesTitle', seriesTitle);
   setText('sidebarSeriesSub',   seriesSub);
-  setText('mobileSeriesTitle',  isMulti ? seriesTitle : books[0].title);
-  setText('mobileBadge',        isMulti ? 'SERIES ARCHIVE' : 'STANDALONE');
+  setText('mobileSeriesTitle',  seriesTitle);
+  setText('mobileBadge',        seriesBadge);
   setText('mobileSeriesHeader', seriesTitle);
   setText('mobileSeriesSub',    seriesSub);
   setText('topbarLocation',     seriesTitle);
-  setText('welcomeEyebrow',     isMulti ? 'SERIES ARCHIVE' : (books[0].author || ''));
-  setText('welcomeTitle',       isMulti ? seriesTitle : books[0].title);
-  setText('welcomeTagline',     isMulti ? seriesAuthor : (books[0].tagline || ''));
-  setText('welcomeSynopsis',    isMulti ? '' : (books[0].synopsis || ''));
-  setText('footerTagline',      isMulti ? seriesTitle : (books[0].tagline || ''));
+  setText('welcomeEyebrow',     seriesBadge);
+  setText('welcomeTitle',       seriesTitle);
+  setText('welcomeTagline',     seriesTagline);
+  setText('welcomeSynopsis',    cfg.synopsis || (isMulti ? '' : (books[0].synopsis || '')));
+  setText('footerTagline',      seriesTagline);
 }
 
 function setText(domKey, value) {
